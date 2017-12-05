@@ -55,29 +55,36 @@ here that the schema above has been loaded in a variable called
 
 ``` python
 >>> import python_jsonschema_objects as pjs
->>> builder = pjs.ObjectBuilder(schema)
+>>> builder = pjs.ObjectBuilder(examples['Example Schema'])
 >>> ns = builder.build_classes()
 >>> Person = ns.ExampleSchema
 >>> james = Person(firstName="James", lastName="Bond")
 >>> james.lastName
-u'Bond'
+<Literal<str> Bond>
+>>> james.lastName == "Bond"
+True
 >>> james
-<example_schema lastName=Bond age=None firstName=James>
+<example_schema address=None age=None deceased=None dogs=None firstName=<Literal<str> James> gender=None lastName=<Literal<str> Bond>>
+
 ```
 
 Validations will also be applied as the object is manipulated.
 
 ``` python
->>> james.age = -2
-python_jsonschema_objects.validators.ValidationError: -2 was less
-or equal to than 0
+>>> james.age = -2  # doctest: +IGNORE_EXCEPTION_DETAIL
+Traceback (most recent call last):
+    ...
+ValidationError: -2 is less than 0
+
 ```
 
-The object can be serialized out to JSON:
+The object can be serialized out to JSON. Options are passed
+through to the standard library JSONEncoder object.
 
 ``` python
->>> james.serialize()
-'{"lastName": "Bond", "age": null, "firstName": "James"}'
+>>> james.serialize(sort_keys=True)
+'{"firstName": "James", "lastName": "Bond"}'
+
 ```
 
 ## Why
@@ -101,14 +108,69 @@ with validation, directly from an input JSON schema. These
 classes can seamlessly encode back and forth to JSON valid
 according to the schema.
 
-## Other Features
+## Fully Functional Literals
+
+Literal values are wrapped when constructed to support validation
+and other schema-related operations. However, you can still use
+them just as you would other literals.
+
+``` python
+>>> import python_jsonschema_objects as pjs
+>>> builder = pjs.ObjectBuilder(examples['Example Schema'])
+>>> ns = builder.build_classes()
+>>> Person = ns.ExampleSchema
+>>> james = Person(firstName="James", lastName="Bond")
+>>> str(james.lastName)
+'Bond'
+>>> james.lastName += "ing"
+>>> str(james.lastName)
+'Bonding'
+>>> james.age = 4
+>>> james.age - 1
+3
+>>> 3 + james.age
+7
+>>> james.lastName / 4
+Traceback (most recent call last):
+    ...
+TypeError: unsupported operand type(s) for /: 'str' and 'int'
+
+```
+
+## Supported Operators
+
+### $ref
+
+The `$ref` operator is supported in nearly all locations, and
+dispatches the actual reference resolution to the
+`jsonschema.RefResolver`.
+
+This example shows using the memory URI (described in more detail
+below) to create a wrapper object that is just a string literal.
+
+``` schema
+{
+    "title": "Just a Reference",
+    "$ref": "memory:Address"
+}
+```
+
+```python
+>>> builder = pjs.ObjectBuilder(examples['Just a Reference'], resolved=examples)
+>>> ns = builder.build_classes()
+>>> ns.JustAReference('Hello')
+<Literal<str> Hello>
+
+```
+
+#### The "memory:" URI
 
 The ObjectBuilder can be passed a dictionary specifying
 'memory' schemas when instantiated. This will allow it to
 resolve references where the referenced schemas are retrieved
 out of band and provided at instantiation.
 
-For instance:
+For instance, given the following schemas:
 
 ``` schema
 {
@@ -136,7 +198,86 @@ For instance:
 }
 ```
 
-Generated wrappers can also properly deserialize data
+The ObjectBuilder can be used to build the "Other" object by
+passing in a definition for "Address".
+
+``` python
+>>> builder = pjs.ObjectBuilder(examples['Other'], resolved={"Address": {"type":"string"}})
+>>> builder.validate({"MyAddress": '1234'})
+>>> ns = builder.build_classes()
+>>> thing = ns.Other()
+>>> thing
+<other MyAddress=None>
+>>> thing.MyAddress = "Franklin Square"
+>>> thing
+<other MyAddress=<Literal<str> Franklin Square>>
+>>> thing.MyAddress = 423  # doctest: +IGNORE_EXCEPTION_DETAIL
+Traceback (most recent call last):
+    ...
+ValidationError: 432 is not a string
+
+```
+
+#### Circular References
+
+Circular references are not a good idea, but they're supported
+anyway via lazy loading (as much as humanly possible).
+
+Given the crazy schema below, we can actually generate these
+classes.
+
+```schema
+{
+    "title": "Circular References",
+    "id": "foo",
+    "type": "object",
+    "oneOf":[
+            {"$ref": "#/definitions/A"},
+            {"$ref": "#/definitions/B"}
+    ],
+    "definitions": {
+        "A": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "reference": {"$ref": "#/definitions/B"}
+            },
+            "required": ["message"]
+        },
+        "B": {
+            "type": "object",
+            "properties": {
+                "author": {"type": "string"},
+                "oreference": {"$ref": "#/definitions/A"}
+            },
+            "required": ["author"]
+        }
+    }
+}
+```
+
+We can instantiate objects that refer to eachother.
+
+```
+>>> builder = pjs.ObjectBuilder(examples['Circular References'])
+>>> klasses = builder.build_classes()
+>>> a = klasses.A()
+>>> b = klasses.B()
+>>> a.message= 'foo'
+>>> a.reference = b  # doctest: +IGNORE_EXCEPTION_DETAIL 
+Traceback (most recent call last):
+    ...
+ValidationError: '[u'author']' are required attributes for B
+>>> b.author = "James Dean"
+>>> a.reference = b
+>>> a
+<A message=<Literal<str> foo> reference=<B author=<Literal<str> James Dean> oreference=None>>
+
+```
+
+### oneOf
+
+Generated wrappers can properly deserialize data
 representing 'oneOf' relationships, so long as the candidate
 schemas are unique.
 
@@ -221,11 +362,11 @@ The schema and code example below show how this works.
 ```
 
 ``` python
->>> builder = pjs.ObjectBuilder('multiple_objects.json')
+>>> builder = pjs.ObjectBuilder(examples["MultipleObjects"])
 >>> classes = builder.build_classes()
->>> print(dir(classes))
-[u'ErrorResponse', 'Local', 'Message', u'Multipleobjects',
-'Status', 'Version', u'VersionGetResponse']
+>>> [str(x) for x in dir(classes)]
+['ErrorResponse', 'Local', 'Message', 'Multipleobjects', 'Status', 'Version', 'VersionGetResponse']
+
 ```
 
 ## Installation
