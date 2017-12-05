@@ -311,7 +311,8 @@ class ProtocolBase(collections.MutableMapping):
                 val.validate()
             elif isinstance(val, list):
                 for subval in val:
-                  subval.validate()
+                  if getattr(subval, 'isLiteralClass', None) is True:
+                    subval.validate()
             else:
                 # This object is of the wrong type, but just try setting it
                 # The property setter will enforce its correctness
